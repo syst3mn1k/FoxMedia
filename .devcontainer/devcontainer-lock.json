@@ -1,0 +1,19 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "1.8.0",
+      "resolved": "ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511",
+      "integrity": "sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511"
+    },
+    "ghcr.io/postfinance/devcontainer-features/python:1": {
+      "version": "1.2.0",
+      "resolved": "ghcr.io/postfinance/devcontainer-features/python@sha256:bc50e41046550473367836ac884cbdff547444cdd3837cc5b7a01f4784a08d77",
+      "integrity": "sha256:bc50e41046550473367836ac884cbdff547444cdd3837cc5b7a01f4784a08d77"
+    },
+    "ghcr.io/stu-bell/devcontainer-features/python:0": {
+      "version": "0.1.0",
+      "resolved": "ghcr.io/stu-bell/devcontainer-features/python@sha256:b8db67df3de3161b736de152c8051eed54f9946ceb916fd7caebadadc3fa4771",
+      "integrity": "sha256:b8db67df3de3161b736de152c8051eed54f9946ceb916fd7caebadadc3fa4771"
+    }
+  }
+}
