@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,12 @@ from app.db.base import Base
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_jobs_idempotency_key",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -23,7 +29,9 @@ class Job(Base):
     payload: Mapped[dict] = mapped_column(JSONB)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
 
-    idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255),
+    )
     correlation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         default=uuid.uuid4,
