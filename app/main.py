@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.db.session import engine
-
+from app.api.routes import jobs
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -34,6 +34,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(
+    jobs.router,
+    prefix="/api/v1/jobs",
+    tags=["jobs"],
+)
 
 @app.get("/health/live")
 async def health_live() -> dict[str, str]:
