@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +11,10 @@ from app.core.config import settings
 from app.models.audit import AuditEvent
 from app.models.job import Job
 from app.queues.streams import enqueue_job
+
+
+class JobCancellationConflict(Exception):
+    pass
 
 
 def record_event(
@@ -146,6 +150,9 @@ async def start_job(
     if job is None:
         raise ValueError(f"Job not found: {job_id}")
 
+    if job.status in {"succeeded", "failed", "cancelled"}:
+        return job
+
     if job.status != "queued":
         raise ValueError(
             f"Job {job_id} cannot start from status {job.status}"
@@ -183,6 +190,43 @@ async def get_job(
     return job
 
 
+async def cancel_job(
+    session: AsyncSession,
+    job_id: str,
+) -> Job:
+    job = await session.get(
+        Job,
+        UUID(job_id),
+        with_for_update=True,
+    )
+
+    if job is None:
+        raise ValueError(f"Job not found: {job_id}")
+
+    if job.status == "cancelled":
+        return job
+
+    if job.status != "queued":
+        raise JobCancellationConflict(
+            f"Job {job_id} cannot be cancelled from status {job.status}"
+        )
+
+    job.status = "cancelled"
+    job.finished_at = datetime.now(timezone.utc)
+
+    record_event(
+        session,
+        job.id,
+        "job.cancelled",
+        {"previous_status": "queued"},
+    )
+
+    await session.commit()
+    await session.refresh(job)
+
+    return job
+
+
 async def list_job_events(
     session: AsyncSession,
     job_id: str,
@@ -201,6 +245,58 @@ async def list_job_events(
     return list(result.all())
 
 
+async def schedule_retry(
+    session: AsyncSession,
+    job: Job,
+    delay_seconds: float,
+    error_code: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    job.status = "retry_wait"
+    job.retry_at = now + timedelta(seconds=delay_seconds)
+    job.error_code = error_code
+
+    record_event(
+        session,
+        job.id,
+        "job.retry_scheduled",
+        {
+            "attempt": job.attempts,
+            "error_code": error_code,
+            "delay_seconds": delay_seconds,
+            "retry_at": job.retry_at.isoformat(),
+        },
+    )
+
+    await session.commit()
+
+
+async def fail_job(
+    session: AsyncSession,
+    job: Job,
+    error_code: str,
+    error_detail: str | None = None,
+) -> None:
+    job.status = "failed"
+    job.error_code = error_code
+    job.error_detail = error_detail
+    job.finished_at = datetime.now(timezone.utc)
+    job.retry_at = None
+
+    record_event(
+        session,
+        job.id,
+        "job.failed",
+        {
+            "attempt": job.attempts,
+            "error_code": error_code,
+        },
+    )
+
+    await session.commit()
+
+
 async def resume_job(
     session: AsyncSession,
     job_id: str,
@@ -214,19 +310,40 @@ async def resume_job(
     if job is None:
         raise ValueError(f"Job not found: {job_id}")
 
-    if job.status != "running":
+    if job.status in {"succeeded", "failed", "cancelled"}:
+        return job
+
+    now = datetime.now(timezone.utc)
+    previous_status = job.status
+
+    if previous_status == "retry_wait":
+        if job.retry_at is not None and job.retry_at > now:
+            return job
+
+    elif previous_status != "running":
         raise ValueError(
             f"Job {job_id} cannot be resumed from status {job.status}"
         )
 
+    job.status = "running"
     job.attempts += 1
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = now
+    job.retry_at = None
+
+    event_type = (
+        "job.retry_started"
+        if previous_status == "retry_wait"
+        else "job.recovered"
+    )
 
     record_event(
         session,
         job.id,
-        "job.recovered",
-        {"attempt": job.attempts},
+        event_type,
+        {
+            "attempt": job.attempts,
+            "previous_status": previous_status,
+        },
     )
 
     await session.commit()

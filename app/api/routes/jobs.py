@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.schemas.jobs import JobAccepted, JobCreate, JobRead
-from app.services.jobs import create_and_enqueue_job, get_job
 
 from app.schemas.jobs import JobAccepted, JobCreate, JobRead, JobEventRead
 from app.services.jobs import (
+    JobCancellationConflict,
+    cancel_job,
     create_and_enqueue_job,
     get_job,
     list_job_events,
@@ -85,3 +85,33 @@ async def read_job_events_endpoint(
         JobEventRead.model_validate(event)
         for event in events
     ]
+
+@router.post(
+    "/{job_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobAccepted,
+)
+async def cancel_job_endpoint(
+    job_id: UUID,
+    session: AsyncSession = Depends(get_session),
+) -> JobAccepted:
+    try:
+        job = await cancel_job(
+            session=session,
+            job_id=str(job_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        ) from exc
+    except JobCancellationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    return JobAccepted(
+        job_id=job.id,
+        status=job.status,
+    )

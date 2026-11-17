@@ -10,11 +10,46 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionFactory
 from app.queues.streams import reclaim_pending
-from app.services.jobs import complete_job, resume_job, start_job
+from app.services.jobs import (
+    complete_job,
+    fail_job,
+    resume_job,
+    schedule_retry,
+    start_job,
+)
 from app.workers.dispatcher import dispatch
 
+from datetime import datetime, timezone
 
+from app.core.errors import classify_job_error
+from app.services.retry import calculate_backoff
 logger = logging.getLogger(__name__)
+
+
+async def resume_when_due(
+    session,
+    job_id: str,
+):
+    job = await resume_job(
+        session=session,
+        job_id=job_id,
+    )
+
+    while job.status == "retry_wait":
+        if job.retry_at is not None:
+            remaining = (
+                job.retry_at - datetime.now(timezone.utc)
+            ).total_seconds()
+
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+
+        job = await resume_job(
+            session=session,
+            job_id=job_id,
+        )
+
+    return job
 
 
 async def process_message(
@@ -44,11 +79,17 @@ async def process_message(
 
     async with SessionFactory() as session:
         if recovered:
-            job = await resume_job(
-                session=session,
-                job_id=job_id,
-            )
+            job = await resume_when_due(session, job_id)
+        else:
+            job = await start_job(session, job_id)
 
+        skipped = job.status in {
+            "succeeded",
+            "failed",
+            "cancelled",
+        }
+
+        if recovered and not skipped:
             logger.info(
                 "job_recovered",
                 extra={
@@ -59,53 +100,133 @@ async def process_message(
                     "attempt": job.attempts,
                 },
             )
-        else:
-            job = await start_job(
-                session=session,
-                job_id=job_id,
+
+        while job.status == "running":
+            execution_payload = {
+                **job.payload,
+                "job_id": str(job.id),
+                "command_type": job.command_type,
+                "correlation_id": str(job.correlation_id),
+            }
+
+            logger.info(
+                "job_started",
+                extra={
+                    "service": "butler-worker",
+                    "job_id": str(job.id),
+                    "correlation_id": str(job.correlation_id),
+                    "command_type": job.command_type,
+                    "attempt": job.attempts,
+                },
             )
 
-        execution_payload = {
-            **job.payload,
-            "job_id": str(job.id),
-            "command_type": job.command_type,
-            "correlation_id": str(job.correlation_id),
-        }
+            try:
+                result = await dispatch(execution_payload)
 
-        logger.info(
-            "job_started",
-            extra={
-                "service": "butler-worker",
-                "job_id": str(job.id),
-                "correlation_id": str(job.correlation_id),
-                "command_type": job.command_type,
-                "attempt": job.attempts,
-            },
-        )
+            except Exception as exc:
+                error_class, error_code = classify_job_error(exc)
 
-        result = await dispatch(execution_payload)
+                if (
+                    error_class == "permanent"
+                    or job.attempts >= settings.job_max_attempts
+                ):
+                    await fail_job(
+                        session=session,
+                        job=job,
+                        error_code=error_code,
+                        error_detail=type(exc).__name__,
+                    )
 
-        await complete_job(
-            session=session,
-            job=job,
-            result=result,
-        )
+                    logger.error(
+                        "job_failed",
+                        extra={
+                            "service": "butler-worker",
+                            "job_id": str(job.id),
+                            "correlation_id": str(job.correlation_id),
+                            "command_type": job.command_type,
+                            "attempt": job.attempts,
+                            "error_code": error_code,
+                        },
+                    )
+                    break
 
-        duration_ms = round(
-            (time.perf_counter() - started) * 1000
-        )
+                delay = calculate_backoff(
+                    attempt=job.attempts - 1,
+                    base_delay=settings.job_retry_base_seconds,
+                    max_delay=settings.job_retry_max_seconds,
+                )
 
-        logger.info(
-            "job_succeeded",
-            extra={
-                "service": "butler-worker",
-                "job_id": str(job.id),
-                "correlation_id": str(job.correlation_id),
-                "command_type": job.command_type,
-                "attempt": job.attempts,
-                "duration_ms": duration_ms,
-            },
-        )
+                await schedule_retry(
+                    session=session,
+                    job=job,
+                    delay_seconds=delay,
+                    error_code=error_code,
+                )
+
+                logger.warning(
+                    "job_retry_scheduled",
+                    extra={
+                        "service": "butler-worker",
+                        "job_id": str(job.id),
+                        "correlation_id": str(job.correlation_id),
+                        "command_type": job.command_type,
+                        "attempt": job.attempts,
+                        "error_code": error_code,
+                        "error_class": error_class,
+                        "delay_seconds": round(delay, 2),
+                    },
+                )
+
+                await asyncio.sleep(delay)
+
+                job = await resume_when_due(
+                    session=session,
+                    job_id=job_id,
+                )
+
+                if job.status in {
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                }:
+                    break
+
+                continue
+
+            await complete_job(
+                session=session,
+                job=job,
+                result=result,
+            )
+
+            duration_ms = round(
+                (time.perf_counter() - started) * 1000
+            )
+
+            logger.info(
+                "job_succeeded",
+                extra={
+                    "service": "butler-worker",
+                    "job_id": str(job.id),
+                    "correlation_id": str(job.correlation_id),
+                    "command_type": job.command_type,
+                    "attempt": job.attempts,
+                    "duration_ms": duration_ms,
+                },
+            )
+            break
+
+        if skipped:
+            logger.info(
+                "job_skipped_terminal",
+                extra={
+                    "service": "butler-worker",
+                    "job_id": job_id,
+                    "correlation_id": correlation_id,
+                    "command_type": command_type,
+                    "status": job.status,
+                },
+            )
 
     await client.xack(
         settings.redis_stream,
