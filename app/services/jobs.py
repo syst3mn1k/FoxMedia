@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -160,7 +160,7 @@ async def start_job(
 
     job.status = "running"
     job.attempts += 1
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = datetime.now(UTC)
 
     record_event(
         session,
@@ -212,7 +212,7 @@ async def cancel_job(
         )
 
     job.status = "cancelled"
-    job.finished_at = datetime.now(timezone.utc)
+    job.finished_at = datetime.now(UTC)
 
     record_event(
         session,
@@ -251,7 +251,7 @@ async def schedule_retry(
     delay_seconds: float,
     error_code: str,
 ) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     job.status = "retry_wait"
     job.retry_at = now + timedelta(seconds=delay_seconds)
@@ -281,7 +281,7 @@ async def fail_job(
     job.status = "failed"
     job.error_code = error_code
     job.error_detail = error_detail
-    job.finished_at = datetime.now(timezone.utc)
+    job.finished_at = datetime.now(UTC)
     job.retry_at = None
 
     record_event(
@@ -313,7 +313,7 @@ async def resume_job(
     if job.status in {"succeeded", "failed", "cancelled"}:
         return job
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     previous_status = job.status
 
     if previous_status == "retry_wait":
@@ -359,7 +359,7 @@ async def complete_job(
 ) -> None:
     job.status = "succeeded"
     job.result = result
-    job.finished_at = datetime.now(timezone.utc)
+    job.finished_at = datetime.now(UTC)
 
     record_event(
         session,

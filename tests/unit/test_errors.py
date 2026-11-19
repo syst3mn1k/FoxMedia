@@ -3,8 +3,8 @@ import httpx
 import pytest
 
 from app.core.errors import (
-    RetryableJobError,
     PermanentJobError,
+    RetryableJobError,
     classify_job_error,
 )
 

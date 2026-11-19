@@ -2,11 +2,13 @@ import asyncio
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
 
 from app.core.config import settings
+from app.core.errors import classify_job_error
 from app.core.logging import configure_logging
 from app.db.session import SessionFactory
 from app.queues.streams import reclaim_pending
@@ -17,12 +19,9 @@ from app.services.jobs import (
     schedule_retry,
     start_job,
 )
+from app.services.retry import calculate_backoff
 from app.workers.dispatcher import dispatch
 
-from datetime import datetime, timezone
-
-from app.core.errors import classify_job_error
-from app.services.retry import calculate_backoff
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +37,7 @@ async def resume_when_due(
     while job.status == "retry_wait":
         if job.retry_at is not None:
             remaining = (
-                job.retry_at - datetime.now(timezone.utc)
+                job.retry_at - datetime.now(UTC)
             ).total_seconds()
 
             if remaining > 0:

@@ -52,6 +52,31 @@ class SonarrClient:
 
         return data
 
+    async def lookup_series(
+        self,
+        query: str,
+    ) -> list[dict[str, Any]]:
+        query = query.strip()
+
+        if not query:
+            raise ValueError("Series lookup query cannot be empty")
+
+        response = await self._client.get(
+            f"api/v{self.api_version}/series/lookup",
+            params={"term": query},
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not isinstance(data, list):
+            raise ValueError("Invalid Sonarr lookup response")
+
+        if not all(isinstance(item, dict) for item in data):
+            raise ValueError("Invalid Sonarr lookup entries")
+
+        return data
+
     async def close(self) -> None:
         await self._client.aclose()
 

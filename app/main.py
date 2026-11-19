@@ -6,9 +6,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.routes import jobs
 from app.core.config import settings
 from app.db.session import engine
-from app.api.routes import jobs
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:

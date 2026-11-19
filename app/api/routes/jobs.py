@@ -4,8 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-
-from app.schemas.jobs import JobAccepted, JobCreate, JobRead, JobEventRead
+from app.schemas.jobs import JobAccepted, JobCreate, JobEventRead, JobRead
 from app.services.jobs import (
     JobCancellationConflict,
     cancel_job,
@@ -13,6 +12,7 @@ from app.services.jobs import (
     get_job,
     list_job_events,
 )
+
 router = APIRouter()
 
 

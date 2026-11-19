@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 
-
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
@@ -20,6 +19,6 @@ SessionFactory = async_sessionmaker(
 )
 
 
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_session() -> AsyncGenerator[AsyncSession]:
     async with SessionFactory() as session:
         yield session

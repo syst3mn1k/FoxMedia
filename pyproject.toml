@@ -54,3 +54,6 @@ select = [
     "UP",
     "B",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"app/api/routes/jobs.py" = ["B008"]

@@ -1,4 +1,6 @@
+
 from functools import lru_cache
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,16 +13,20 @@ class Settings(BaseSettings):
     redis_url: str
 
     telegram_bot_token: SecretStr | None = None
-
-    telegram_allowed_user_ids: set[int] = Field(
-        default_factory=set,
-    )
+    telegram_allowed_user_ids: set[int] = Field(default_factory=set)
 
     butler_api_url: str = "http://127.0.0.1:8000"
 
     sonarr_base_url: str | None = None
     sonarr_api_key: SecretStr | None = None
     sonarr_api_version: int = 3
+
+    radarr_base_url: str | None = None
+    radarr_api_key: SecretStr | None = None
+    radarr_api_version: int = 3
+
+    jellyfin_base_url: str | None = None
+    jellyfin_api_key: SecretStr | None = None
 
     redis_stream: str = "foxmedia:jobs"
     redis_consumer_group: str = "foxmedia-workers"

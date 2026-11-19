@@ -8,7 +8,6 @@ from aiogram.types import Message
 from app.core.config import settings
 from app.core.logging import configure_logging
 
-
 router = Router(name="foxmedia_bot")
 
 
