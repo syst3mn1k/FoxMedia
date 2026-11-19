@@ -320,7 +320,7 @@ async def resume_job(
         if job.retry_at is not None and job.retry_at > now:
             return job
 
-    elif previous_status != "running":
+    elif previous_status not in {"running", "queued"}:
         raise ValueError(
             f"Job {job_id} cannot be resumed from status {job.status}"
         )
@@ -360,6 +360,11 @@ async def complete_job(
     job.status = "succeeded"
     job.result = result
     job.finished_at = datetime.now(UTC)
+
+    # Clear errors from previous retry attempts
+    job.error_code = None
+    job.error_detail = None
+    job.retry_at = None
 
     record_event(
         session,
