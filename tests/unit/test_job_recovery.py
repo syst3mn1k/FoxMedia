@@ -35,6 +35,14 @@ async def test_resume_job_from_queued_after_worker_crash(monkeypatch):
             events.append((event_type, details)),
     )
 
+    start_attempt_mock = AsyncMock()
+
+    monkeypatch.setattr(
+        jobs_module,
+        "start_attempt",
+        start_attempt_mock,
+    )
+
     result = await jobs_module.resume_job(
         session=session,
         job_id=str(job_id),
@@ -109,6 +117,14 @@ async def test_complete_job_clears_previous_retry_error(monkeypatch):
         "record_event",
         lambda session, job_id, event_type, details:
             events.append((event_type, details)),
+    )
+
+    finish_attempt_mock = AsyncMock()
+
+    monkeypatch.setattr(
+        jobs_module,
+        "finish_attempt",
+        finish_attempt_mock,
     )
 
     await jobs_module.complete_job(

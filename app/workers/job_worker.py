@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import ResponseError
 
 from app.core.config import settings
 from app.core.errors import classify_job_error
@@ -19,6 +20,7 @@ from app.services.jobs import (
     schedule_retry,
     start_job,
 )
+from app.services.outbox_publisher import OutboxPublisher
 from app.services.retry import calculate_backoff
 from app.workers.dispatcher import dispatch
 
@@ -36,9 +38,7 @@ async def resume_when_due(
 
     while job.status == "retry_wait":
         if job.retry_at is not None:
-            remaining = (
-                job.retry_at - datetime.now(UTC)
-            ).total_seconds()
+            remaining = (job.retry_at - datetime.now(UTC)).total_seconds()
 
             if remaining > 0:
                 await asyncio.sleep(remaining)
@@ -125,10 +125,7 @@ async def process_message(
             except Exception as exc:
                 error_class, error_code = classify_job_error(exc)
 
-                if (
-                    error_class == "permanent"
-                    or job.attempts >= settings.job_max_attempts
-                ):
+                if error_class == "permanent" or job.attempts >= settings.job_max_attempts:
                     await fail_job(
                         session=session,
                         job=job,
@@ -198,9 +195,7 @@ async def process_message(
                 result=result,
             )
 
-            duration_ms = round(
-                (time.perf_counter() - started) * 1000
-            )
+            duration_ms = round((time.perf_counter() - started) * 1000)
 
             logger.info(
                 "job_succeeded",
@@ -244,6 +239,34 @@ async def process_message(
     )
 
 
+async def run_outbox_publisher(
+    publisher: OutboxPublisher,
+) -> None:
+    while True:
+        try:
+            published_count = await publisher.publish_batch()
+
+            if published_count:
+                logger.info(
+                    "outbox_batch_published",
+                    extra={
+                        "service": "butler-worker",
+                        "published_count": published_count,
+                    },
+                )
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception:
+            logger.exception(
+                "outbox_publish_failed",
+                extra={"service": "butler-worker"},
+            )
+
+        await asyncio.sleep(1)
+
+
 async def main() -> None:
     configure_logging(settings.log_level)
 
@@ -253,6 +276,32 @@ async def main() -> None:
     )
 
     consumer_name = "worker-1"
+
+    # Create the stream and consumer group on first startup.
+    try:
+        await client.xgroup_create(
+            name=settings.redis_stream,
+            groupname=settings.redis_consumer_group,
+            id="0",
+            mkstream=True,
+        )
+        logger.info("redis_consumer_group_created")
+    except ResponseError as exc:
+        if "BUSYGROUP" not in str(exc):
+            raise
+
+
+    publisher = OutboxPublisher(
+        session_factory=SessionFactory,
+        client=client,
+        stream=settings.redis_stream,
+        publisher_id=f"{consumer_name}-outbox",
+    )
+
+    publisher_task = asyncio.create_task(
+        run_outbox_publisher(publisher),
+        name="outbox-publisher",
+    )
 
     logger.info(
         "worker_started",
@@ -298,6 +347,13 @@ async def main() -> None:
                         recovered=False,
                     )
     finally:
+        publisher_task.cancel()
+
+        try:
+            await publisher_task
+        except asyncio.CancelledError:
+            pass
+
         await client.aclose()
 
 

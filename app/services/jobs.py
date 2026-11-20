@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-import redis.asyncio as redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.audit import AuditEvent
 from app.models.job import Job
-from app.queues.streams import enqueue_job
+from app.models.outbox import OutboxMessage
+from app.services.attempts import finish_attempt, start_attempt
 
 
 class JobCancellationConflict(Exception):
@@ -37,6 +37,8 @@ async def _create_job(
     command_type: str,
     payload: dict[str, Any],
     idempotency_key: str | None = None,
+    *,
+    enqueue: bool = False,
 ) -> tuple[Job, bool]:
 
     if idempotency_key is not None:
@@ -68,6 +70,21 @@ async def _create_job(
             "job.created",
             {"command_type": command_type},
         )
+
+        if enqueue:
+            session.add(
+                OutboxMessage(
+                    aggregate_type="job",
+                    aggregate_id=job.id,
+                    topic=settings.redis_stream,
+                    payload={
+                        "job_id": str(job.id),
+                        "command_type": job.command_type,
+                        "correlation_id": str(job.correlation_id),
+                        "schema_version": 1,
+                    },
+                )
+            )
 
         await session.commit()
 
@@ -110,29 +127,18 @@ async def create_job(
 
 async def create_and_enqueue_job(
     session: AsyncSession,
-    client: redis.Redis,
     command_type: str,
     payload: dict[str, Any],
     idempotency_key: str | None = None,
 ) -> Job:
 
-    job, created = await _create_job(
+    job, _ = await _create_job(
         session=session,
         command_type=command_type,
         payload=payload,
         idempotency_key=idempotency_key,
+        enqueue=True,
     )
-
-    if created:
-        await enqueue_job(
-            client,
-            settings.redis_stream,
-            {
-                "job_id": str(job.id),
-                "command_type": job.command_type,
-                "correlation_id": str(job.correlation_id),
-            },
-        )
 
     return job
 
@@ -167,6 +173,12 @@ async def start_job(
         job.id,
         "job.started",
         {"attempt": job.attempts},
+    )
+
+    await start_attempt(
+        session=session,
+        job_id=job.id,
+        attempt_no=job.attempts,
     )
 
     await session.commit()
@@ -269,6 +281,14 @@ async def schedule_retry(
         },
     )
 
+    await finish_attempt(
+        session=session,
+        job_id=job.id,
+        attempt_no=job.attempts,
+        outcome="retryable_failure",
+        error_code=error_code,
+    )
+
     await session.commit()
 
 
@@ -292,6 +312,15 @@ async def fail_job(
             "attempt": job.attempts,
             "error_code": error_code,
         },
+    )
+
+    await finish_attempt(
+        session=session,
+        job_id=job.id,
+        attempt_no=job.attempts,
+        outcome="final_failure",
+        error_code=error_code,
+        error_detail=error_detail,
     )
 
     await session.commit()
@@ -327,6 +356,13 @@ async def resume_job(
 
     job.status = "running"
     job.attempts += 1
+
+    await start_attempt(
+        session=session,
+        job_id=job.id,
+        attempt_no=job.attempts,
+    )
+
     job.started_at = now
     job.retry_at = None
 
@@ -371,6 +407,13 @@ async def complete_job(
         job.id,
         "job.succeeded",
         {"attempt": job.attempts},
+    )
+
+    await finish_attempt(
+        session=session,
+        job_id=job.id,
+        attempt_no=job.attempts,
+        outcome="succeeded",
     )
 
     await session.commit()

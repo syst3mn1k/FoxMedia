@@ -28,7 +28,6 @@ async def create_job_endpoint(
 ) -> JobAccepted:
     job = await create_and_enqueue_job(
         session=session,
-        client=request.app.state.redis,
         command_type=command.command_type,
         payload=command.payload,
         idempotency_key=command.idempotency_key,

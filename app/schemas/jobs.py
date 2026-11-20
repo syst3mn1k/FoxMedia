@@ -42,7 +42,7 @@ class JobRead(BaseModel):
 class JobEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    event_id: UUID = Field(validation_alias="id")
+    event_id: int = Field(validation_alias="id")
     event_type: str
-    details: dict[str, Any] | None
+    details: dict[str, Any]
     created_at: datetime
